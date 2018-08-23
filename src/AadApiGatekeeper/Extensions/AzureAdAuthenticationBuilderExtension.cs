@@ -12,7 +12,6 @@ namespace Microsoft.AspNetCore.Authentication
     {
         public static AuthenticationBuilder AddAzureAdBearer(this AuthenticationBuilder builder, Action<AadAuthenticationOptions> configureOptions)
         {
-            builder.Services.Configure(configureOptions);
             builder.Services.AddSingleton<IConfigureOptions<JwtBearerOptions>, ConfigureAzureOptions>();
             builder.AddJwtBearer();
             return builder;

@@ -3,11 +3,14 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 
 namespace Microsoft.AspNetCore.Authentication
 {
@@ -16,12 +19,26 @@ namespace Microsoft.AspNetCore.Authentication
         public static IServiceCollection AddAuthProxy(this IServiceCollection collection, Action<AuthProxyOptions> proxyOptions, Action<AadAuthenticationOptions> authOptions)
         {
             collection.Configure(proxyOptions);
+            collection.Configure(authOptions);
 
-            collection.AddAuthentication(options =>
-            {
-                options.DefaultScheme = JwtBearerDefaults.AuthenticationScheme;
-            })
-            .AddAzureAdBearer(authOptions);
+            var aadSettings = new AadAuthenticationOptions();
+            authOptions(aadSettings);
+            
+            collection.AddAuthentication(o =>
+                {
+                    o.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+                    o.DefaultChallengeScheme = OpenIdConnectDefaults.AuthenticationScheme;
+                })
+                .AddAzureAdBearer(authOptions)
+                .AddOpenIdConnect(options =>
+                {
+                    options.Authority =  $"https://login.microsoftonline.com/{aadSettings.Tenant}";
+                    options.ClientId = aadSettings.ClientId;
+                    options.ResponseType = OpenIdConnectResponseType.IdToken;
+                    options.CallbackPath = aadSettings.CallbackPath;
+                    options.SaveTokens = true;
+                })
+                .AddCookie();
 
             return collection;
         }
@@ -47,7 +64,8 @@ namespace Microsoft.AspNetCore.Authentication
 
         private static bool MustForward(HttpContext context)
         {
-            if (context.Request.Path.StartsWithSegments(new PathString("/me")))
+            if (context.Request.Path.StartsWithSegments(new PathString("/me")) || 
+                context.Request.Path.StartsWithSegments(new PathString("/login")))
             {
                 return false;
             }
@@ -59,15 +77,12 @@ namespace Microsoft.AspNetCore.Authentication
     public class AuthProxyMiddleware
     {
         private readonly RequestDelegate _next;
-        private readonly AuthProxyOptions _authProxyOptions;
         private readonly List<string> _anonymousPaths;        
 
         public AuthProxyMiddleware(RequestDelegate next, IOptions<AuthProxyOptions> authProxyOptions)
         {
             _next = next;
-            _authProxyOptions = authProxyOptions.Value;
-
-            _anonymousPaths = _authProxyOptions.AnonymousPaths?.Split(',').ToList() ?? new List<string>();
+            _anonymousPaths = authProxyOptions.Value.AnonymousPaths?.Split(',').ToList() ?? new List<string>();
         }
 
         public async Task Invoke(HttpContext context)
@@ -78,6 +93,10 @@ namespace Microsoft.AspNetCore.Authentication
                 await _next(context);
             }
             else if (_anonymousPaths.Any(p => context.Request.Path.StartsWithSegments(p)))
+            {
+                await _next(context);
+            }
+            else if (context.Request.Path.StartsWithSegments("/login"))
             {
                 await _next(context);
             }
